@@ -1,18 +1,17 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Clock, RotateCcw } from "lucide-react"
+import { Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface TimePickerProps {
   currentTime: Date
   onTimeChange: (newTime: Date) => void
-  onReset: () => void
   isEditing: boolean
   onToggleEdit: () => void
 }
 
-export function TimePicker({ currentTime, onTimeChange, onReset, isEditing, onToggleEdit }: TimePickerProps) {
+export function TimePicker({ currentTime, onTimeChange, isEditing, onToggleEdit }: TimePickerProps) {
   const [hours, setHours] = useState(currentTime.getHours().toString().padStart(2, '0'))
   const [minutes, setMinutes] = useState(currentTime.getMinutes().toString().padStart(2, '0'))
 

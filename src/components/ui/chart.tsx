@@ -34,6 +34,23 @@ function useChart() {
   return context
 }
 
+type TooltipFormatter<TValue, TName> = (
+  value: TValue,
+  name: TName,
+  item: Payload<TValue, TName>,
+  index: number,
+  payload: Payload<TValue, TName>[]
+) => React.ReactNode
+
+type Payload<TValue = number, TName = string> = {
+  [key: string]: unknown
+  name: TName
+  value: TValue
+  payload: {
+    [key: string]: unknown
+  }
+}
+
 function ChartContainer({
   id,
   className,
@@ -104,7 +121,7 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
-function ChartTooltipContent({
+function ChartTooltipContent<TValue extends number, TName extends string>({
   active,
   payload,
   className,
@@ -118,12 +135,13 @@ function ChartTooltipContent({
   color,
   nameKey,
   labelKey,
-}: any & {
+}: RechartsPrimitive.TooltipProps<TValue, TName> & {
     hideLabel?: boolean
     hideIndicator?: boolean
     indicator?: "line" | "dot" | "dashed"
     nameKey?: string
     labelKey?: string
+    formatter?: TooltipFormatter<TValue, TName>
   }) {
   const { config } = useChart()
 
@@ -178,7 +196,7 @@ function ChartTooltipContent({
     >
       {!nestLabel ? tooltipLabel : null}
       <div className="grid gap-1.5">
-        {payload.map((item: any, index: number) => {
+        {payload.map((item, index) => {
           const key = `${nameKey || item.name || item.dataKey || "value"}`
           const itemConfig = getPayloadConfigFromPayload(config, item, key)
           const indicatorColor = color || item.payload.fill || item.color
@@ -249,7 +267,7 @@ function ChartTooltipContent({
 
 const ChartLegend = RechartsPrimitive.Legend
 
-function ChartLegendContent({
+function ChartLegendContent<TValue extends number, TName extends string>({
   className,
   hideIcon = false,
   payload,
@@ -258,8 +276,8 @@ function ChartLegendContent({
 }: React.ComponentProps<"div"> & {
     hideIcon?: boolean
     nameKey?: string
-    payload?: any
-    verticalAlign?: string
+    payload?: Payload<TValue, TName>[]
+    verticalAlign?: RechartsPrimitive.LegendProps["verticalAlign"]
   }) {
   const { config } = useChart()
 
@@ -275,7 +293,7 @@ function ChartLegendContent({
         className
       )}
     >
-      {payload.map((item: any) => {
+      {payload.map((item) => {
         const key = `${nameKey || item.dataKey || "value"}`
         const itemConfig = getPayloadConfigFromPayload(config, item, key)
 

@@ -5,9 +5,14 @@ import type { CurrentWeather, GeoSearchResult, IpLocation } from '@/types'
 // --- Fetchers (can be swapped or proxied) ---
 
 export async function fetchIpLocation(signal?: AbortSignal): Promise<IpLocation> {
-  const j = await getJSON<any>('https://ipapi.co/json/', { signal })
+  const j = await getJSON<{
+    city?: string
+    latitude: number
+    longitude: number
+    timezone: string
+  }>('https://ipapi.co/json/', { signal })
   return {
-    city: j.city ?? undefined,
+    city: j.city,
     lat: Number(j.latitude),
     lon: Number(j.longitude),
     tz: String(j.timezone),
