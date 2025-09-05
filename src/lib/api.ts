@@ -25,8 +25,18 @@ export async function searchCitiesByName(query: string, signal?: AbortSignal): P
   url.searchParams.set('name', query)
   url.searchParams.set('count', '5')
   url.searchParams.set('language', 'en')
-  const j = await getJSON<any>(url.toString(), { signal })
-  return (j.results ?? []).map((r: any) => ({
+  const j = await getJSON<{
+    results?: Array<{
+      id?: number
+      name: string
+      country: string
+      country_code: string
+      latitude: number
+      longitude: number
+      timezone: string
+    }>
+  }>(url.toString(), { signal })
+  return (j.results ?? []).map((r) => ({
     id: String(r.id ?? `${r.name}-${r.country_code}-${r.latitude}-${r.longitude}`),
     name: r.name,
     country: r.country,
@@ -44,7 +54,15 @@ export async function fetchCurrentWeather(lat: number, lon: number, signal?: Abo
   url.searchParams.set('temperature_unit', 'celsius')
   url.searchParams.set('precipitation_unit', 'mm')
   url.searchParams.set('timezone', 'auto')
-  const j = await getJSON<any>(url.toString(), { signal })
+  const j = await getJSON<{
+    current?: {
+      temperature_2m?: number
+      precipitation?: number
+      precipitation_probability?: number
+      weather_code?: number
+      time?: string
+    }
+  }>(url.toString(), { signal })
   const c = j.current ?? {}
   return {
     temperatureC: Number(c.temperature_2m ?? NaN),

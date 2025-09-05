@@ -64,7 +64,7 @@ export function CityTimeRadialChart({ cities, instant }: CityTimeRadialChartProp
         }
       })
       .sort((a, b) => a.sortKey - b.sortKey) // Sort by time percentage (00:00 to 23:59)
-      .map(({ sortKey: _, ...cityData }) => cityData), // Remove sortKey from final data
+      .map(({ sortKey, ...cityData }) => cityData), // Remove sortKey from final data
     // Single reference bar (completely transparent) - moved to the end
     {
       city: "", // Empty string so no label shows

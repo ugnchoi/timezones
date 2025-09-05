@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-query'
 import { qk } from '@/lib/queryKeys'
 import { fetchIpLocation, searchCitiesByName, fetchCurrentWeather } from '@/lib/api'
-import type { CurrentWeather, GeoSearchResult, IpLocation } from '@/types'
+import type { CurrentWeather } from '@/types'
 
 // ---- IP location (rarely changes) ----
 export const ipLocationQuery = queryOptions({
