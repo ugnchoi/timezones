@@ -76,7 +76,7 @@ export function AddCityDialog({ open, onOpenChange, onSelect, existingCities }: 
         onOpenChange(false)
         break
     }
-  }, [results, activeIndex, onOpenChange])
+  }, [results, activeIndex, onOpenChange, handleSelect])
 
   const handleSelect = React.useCallback(async (result: GeoSearchResult) => {
     const city: City = {
@@ -125,7 +125,7 @@ export function AddCityDialog({ open, onOpenChange, onSelect, existingCities }: 
     onOpenChange(false)
     setQ('')
     setActiveIndex(0)
-  }, [isDuplicate, onOpenChange, onSelect, prefetchWeather])
+  }, [isDuplicate, onOpenChange, onSelect, prefetchWeather, showDedupeToast])
 
   const showDedupeToast = React.useCallback((cityName: string) => {
     // Create a simple toast notification

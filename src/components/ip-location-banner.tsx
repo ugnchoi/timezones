@@ -26,7 +26,7 @@ export function IpLocationBanner() {
         
         // Show banner if IP detection fails
         setIsVisible(true)
-      } catch (error) {
+      } catch {
         // Show banner on any error
         setIsVisible(true)
       }

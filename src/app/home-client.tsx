@@ -11,7 +11,6 @@ import { useCityStore } from '@/state/cityStore';
 import { useBaselineInstant } from '@/state/baseline';
 import { Separator } from '@/components/ui/separator';
 import { EmptyState } from '@/components/empty-state';
-import { Info } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const DEFAULTS: City[] = [

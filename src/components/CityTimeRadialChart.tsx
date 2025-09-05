@@ -124,7 +124,7 @@ export function CityTimeRadialChart({ cities, instant }: CityTimeRadialChartProp
                 <ChartTooltipContent 
                   hideLabel 
                   nameKey="city"
-                  formatter={(value: any, name: any, item: any) => {
+                  formatter={(value: number, name: string, item: { payload: { city: string; country: string; actualTime: string } }) => {
                     const data = item.payload
                     return (
                       <div className="flex flex-col gap-1">
