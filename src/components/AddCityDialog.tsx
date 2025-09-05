@@ -37,13 +37,82 @@ export function AddCityDialog({ open, onOpenChange, onSelect, existingCities }: 
 
   // Check if city already exists
   const isDuplicate = React.useCallback((city: GeoSearchResult): boolean => {
-    return existingCities.some(existing => 
-      existing.id === city.id || 
-      (existing.name === city.name && 
-       Math.abs(existing.lat - city.lat) < COORDINATE_TOLERANCE && 
+    return existingCities.some(existing =>
+      existing.id === city.id ||
+      (existing.name === city.name &&
+       Math.abs(existing.lat - city.lat) < COORDINATE_TOLERANCE &&
        Math.abs(existing.lon - city.lon) < COORDINATE_TOLERANCE)
     )
   }, [existingCities])
+
+  // Define functions in dependency order
+  const showDedupeToast = React.useCallback((cityName: string) => {
+    // Create a simple toast notification
+    const toast = document.createElement('div')
+    toast.setAttribute('role', 'status')
+    toast.setAttribute('aria-live', 'polite')
+    toast.className = 'fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 bg-background border border-border rounded-lg shadow-lg px-4 py-3 text-sm animate-in slide-in-from-bottom-2 duration-200'
+    toast.textContent = `${cityName} is already in your list.`
+
+    document.body.appendChild(toast)
+    const timeoutId = setTimeout(() => {
+      if (document.body.contains(toast)) {
+        document.body.removeChild(toast)
+      }
+    }, TOAST_DURATION)
+
+    // Cleanup function to remove timeout if component unmounts
+    return () => clearTimeout(timeoutId)
+  }, [])
+
+  const handleSelect = React.useCallback(async (result: GeoSearchResult) => {
+    const city: City = {
+      id: result.id,
+      name: result.name,
+      country: result.country,
+      lat: result.lat,
+      lon: result.lon,
+      tz: result.tz,
+    }
+
+    // Check for duplicates
+    if (isDuplicate(result)) {
+      // Close dialog and trigger dedupe behavior
+      onOpenChange(false)
+
+      // Find existing city row and highlight it
+      setTimeout(() => {
+        const existingRow = document.querySelector(`[data-city-id="${city.id}"]`) as HTMLElement
+        if (existingRow) {
+          // Check if user prefers reduced motion
+          const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+          existingRow.scrollIntoView({
+            block: 'center',
+            behavior: prefersReducedMotion ? 'auto' : 'smooth'
+          })
+
+          // Highlight the existing row
+          existingRow.classList.add('bg-amber-50', 'dark:bg-amber-950/20')
+          setTimeout(() => {
+            existingRow.classList.remove('bg-amber-50', 'dark:bg-amber-950/20')
+          }, HIGHLIGHT_DURATION)
+
+          // Show dedupe toast
+          showDedupeToast(city.name)
+        }
+      }, 100)
+      return
+    }
+
+    // Prefetch weather data for instant rendering
+    await prefetchWeather(city.lat, city.lon)
+
+    onSelect(city)
+    onOpenChange(false)
+    setQ('')
+    setActiveIndex(0)
+  }, [isDuplicate, onOpenChange, onSelect, prefetchWeather, showDedupeToast])
 
   const handleKeyDown = React.useCallback((e: React.KeyboardEvent) => {
     if (!results || results.length === 0) return
@@ -77,74 +146,6 @@ export function AddCityDialog({ open, onOpenChange, onSelect, existingCities }: 
         break
     }
   }, [results, activeIndex, onOpenChange, handleSelect])
-
-  const handleSelect = React.useCallback(async (result: GeoSearchResult) => {
-    const city: City = {
-      id: result.id,
-      name: result.name,
-      country: result.country,
-      lat: result.lat,
-      lon: result.lon,
-      tz: result.tz,
-    }
-
-    // Check for duplicates
-    if (isDuplicate(result)) {
-      // Close dialog and trigger dedupe behavior
-      onOpenChange(false)
-      
-      // Find existing city row and highlight it
-      setTimeout(() => {
-        const existingRow = document.querySelector(`[data-city-id="${city.id}"]`) as HTMLElement
-        if (existingRow) {
-          // Check if user prefers reduced motion
-          const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          
-          existingRow.scrollIntoView({ 
-            block: 'center', 
-            behavior: prefersReducedMotion ? 'auto' : 'smooth' 
-          })
-          
-          // Highlight the existing row
-          existingRow.classList.add('bg-amber-50', 'dark:bg-amber-950/20')
-          setTimeout(() => {
-            existingRow.classList.remove('bg-amber-50', 'dark:bg-amber-950/20')
-          }, HIGHLIGHT_DURATION)
-          
-          // Show dedupe toast
-          showDedupeToast(city.name)
-        }
-      }, 100)
-      return
-    }
-
-    // Prefetch weather data for instant rendering
-    await prefetchWeather(city.lat, city.lon)
-    
-    onSelect(city)
-    onOpenChange(false)
-    setQ('')
-    setActiveIndex(0)
-  }, [isDuplicate, onOpenChange, onSelect, prefetchWeather, showDedupeToast])
-
-  const showDedupeToast = React.useCallback((cityName: string) => {
-    // Create a simple toast notification
-    const toast = document.createElement('div')
-    toast.setAttribute('role', 'status')
-    toast.setAttribute('aria-live', 'polite')
-    toast.className = 'fixed bottom-4 left-1/2 transform -translate-x-1/2 z-50 bg-background border border-border rounded-lg shadow-lg px-4 py-3 text-sm animate-in slide-in-from-bottom-2 duration-200'
-    toast.textContent = `${cityName} is already in your list.`
-    
-    document.body.appendChild(toast)
-    const timeoutId = setTimeout(() => {
-      if (document.body.contains(toast)) {
-        document.body.removeChild(toast)
-      }
-    }, TOAST_DURATION)
-    
-    // Cleanup function to remove timeout if component unmounts
-    return () => clearTimeout(timeoutId)
-  }, [])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setQ(e.target.value)
