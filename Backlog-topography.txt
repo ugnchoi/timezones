@@ -1,0 +1,212 @@
+adding subtle topo as a background.
+I want to show only gray lines and very faint gray hillshade
+
+MapLibre GL JS + AWS “Terrain Tiles” (Terrarium)
+
+MapLibre GL JS – WebGL map engine; supports hillshade from DEM tiles, including Mapzen Terrarium encoding. Ideal for label‑free shaded relief under your UI.
+
+Open topography / background data sources (global)
+
+A) DEM tiles for client‑side hillshade (label‑free)
+	•	Mapzen “Terrain Tiles” on AWS (Terrarium / Normal)
+Global DEM encoded as PNG tiles. Use with MapLibre’s raster-dem source and a hillshade layer. Example Terrarium endpoint:
+https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png
+
+(Public dataset; great for subtle relief without labels.)  
+
+// install: pnpm add maplibre-gl
+import maplibregl from 'maplibre-gl';
+
+const map = new maplibregl.Map({
+  container: 'bg-map',
+  style: {
+    version: 8,
+    sources: {
+      dem: {
+        type: 'raster-dem',
+        tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        // MapLibre hillshade supports Terrarium & Mapbox encodings
+        encoding: 'terrarium'
+      }
+    },
+    layers: [
+      { id: 'hillshade', type: 'hillshade', source: 'dem', layout: {}, paint: { 'hillshade-exaggeration': 0.6 } }
+    ]
+  },
+  interactive: false,   // background only
+  attributionControl: false,
+});
+
+Place it behind your UI:
+<div id="bg-map" class="fixed inset-0 -z-10 opacity-60 pointer-events-none"></div>
+
+
+
+2. Overlay city dots on the background in three straightforward ways. Pick the one that matches how you render the background.
+
+1) Drop‑in <MapBackground /> component
+
+This renders Terrarium hillshade and a GeoJSON circle layer for your cities. It auto‑fits to your cities and stays behind the UI.
+// src/components/MapBackground.tsx
+'use client';
+import * as React from 'react';
+import maplibregl, { Map, GeoJSONSource } from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import type { City } from '@/types';
+
+type Props = {
+  cities: City[];
+  hoveredId?: string | null; // optional: highlight dot when a row is hovered
+  dim?: number;              // 0..1 opacity of the map; default 0.5
+};
+
+export function MapBackground({ cities, hoveredId, dim = 0.5 }: Props) {
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  const mapRef = React.useRef<Map | null>(null);
+
+  // Build GeoJSON from cities
+  const fc = React.useMemo(() => ({
+    type: 'FeatureCollection',
+    features: cities.map((c) => ({
+      type: 'Feature',
+      id: c.id, // important for feature-state highlighting
+      properties: { name: c.name },
+      geometry: { type: 'Point', coordinates: [c.lon, c.lat] as [number, number] },
+    })),
+  }), [cities]);
+
+  // Create map once
+  React.useEffect(() => {
+    if (!ref.current || mapRef.current) return;
+
+    const map = new maplibregl.Map({
+      container: ref.current,
+      interactive: false,           // background-only
+      attributionControl: false,
+      style: {
+        version: 8,
+        sources: {
+          dem: {
+            type: 'raster-dem',
+            tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            encoding: 'terrarium',
+          },
+          cities: {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+            generateId: false,
+          },
+        },
+        layers: [
+          { id: 'hillshade', type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0.6 } },
+          {
+            id: 'city-dots',
+            type: 'circle',
+            source: 'cities',
+            paint: {
+              // small at low zooms, slightly larger when zoomed in
+              'circle-radius': [
+                'interpolate', ['linear'], ['zoom'],
+                0, 2.0,
+                2, 2.8,
+                5, 4.0
+              ],
+              // accent when hovered, otherwise neutral
+              'circle-color': [
+                'case',
+                ['boolean', ['feature-state', 'hover'], false], '#0ea5e9',  // accent
+                '#111827'                                                  // neutral
+              ],
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#ffffff',
+              'circle-opacity': 0.9,
+              'circle-stroke-opacity': 0.9,
+            },
+          },
+        ],
+      },
+      center: [0, 20],
+      zoom: 1.6,
+    });
+
+    mapRef.current = map;
+    return () => map.remove();
+  }, []);
+
+  // Update data whenever cities change
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const src = map.getSource('cities') as GeoJSONSource | undefined;
+    if (src) src.setData(fc);
+
+    // fit to cities with padding
+    if (cities.length > 0) {
+      let minLon = +Infinity, minLat = +Infinity, maxLon = -Infinity, maxLat = -Infinity;
+      for (const c of cities) {
+        if (c.lon < minLon) minLon = c.lon;
+        if (c.lat < minLat) minLat = c.lat;
+        if (c.lon > maxLon) maxLon = c.lon;
+        if (c.lat > maxLat) maxLat = c.lat;
+      }
+      map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 100, duration: 0 });
+    }
+  }, [fc, cities]);
+
+  // Highlight hovered city (from list hover)
+  React.useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // clear any previous hover states
+    for (const f of fc.features) {
+      map.setFeatureState({ source: 'cities', id: f.id as string }, { hover: false });
+    }
+    if (hoveredId) {
+      map.setFeatureState({ source: 'cities', id: hoveredId }, { hover: true });
+    }
+  }, [hoveredId, fc]);
+
+  return (
+    <div
+      ref={ref}
+      style={{ opacity: dim }}
+      className="fixed inset-0 -z-10 pointer-events-none"
+      aria-hidden
+    />
+  );
+}
+
+Use it in your page:
+// app/home-client.tsx
+import { MapBackground } from '@/components/MapBackground';
+
+export default function HomeClient() {
+  // …existing code…
+  const [hoverId, setHoverId] = React.useState<string | null>(null);
+
+  return (
+    <>
+      <MapBackground cities={cities} hoveredId={hoverId} dim={0.45} />
+      <main>…</main>
+    </>
+  );
+}
+
+Wire row hover to highlight the dot (optional):
+// src/components/CityRow.tsx (outermost div)
+<div
+  onMouseEnter={() => onHover?.(city.id)}
+  onMouseLeave={() => onHover?.(null)}
+  // …rest…
+/>
+
+Pass onHover={(id) => setHoverId(id)} from CityList → page.
+Nice touches (optional)
+	•	Labels on hover only: add a MapLibre symbol layer with text-field: ['get', 'name'] and text-opacity: 0 that animates to 1 for the hovered feature (or show a small tooltip next to the dot in DOM).
+	•	Pulsing local dot: use a second circle layer with circle-blur + circle-radius animated via requestAnimationFrame for the user’s current city, or just double‑stroke it (bigger white stroke).
+	•	Click‑to‑scroll: if you want clicks on dots to scroll to the city row, set the map to interactive: true, then disable all handlers:
+
+    map.scrollZoom.disable(); map.dragPan.disable(); map.doubleClickZoom.disable();
+// then listen for 'click' on 'city-dots' and call scrollIntoView on the row.

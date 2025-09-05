@@ -1,0 +1,316 @@
+0) Principles (to guide all decisions)
+	•	Fast, forgiving, focusable. No blocking modals except “Add city.” Inline edits, Undo over Confirm.
+	•	Keyboard parity with pointer. Everything discoverable by Tab. Hover‑only affordances must also appear on focus.
+	•	Predictable refresh. Times tick locally; weather refreshes gently (every 5 min or on focus when stale).
+	•	Reduced cognitive load. Plain microcopy, stable placement, minimal motion, and clear states.
+
+⸻
+
+1) Global patterns
+
+1.1 Focus management
+	•	Initial focus: none (let users scan), but provide a visually obvious “➕ Add city” target at end of list.
+	•	Skip: Provide an invisible “Skip to content” link that appears on Tab at very top (landmarks: header, main).
+	•	Focus ring: Use browser default or Tailwind focus-visible:outline with high contrast.
+	•	Focus order: Header (Local Time control) → list rows in document order → Add city.
+
+1.2 Motion
+	•	Transitions: 150–200ms opacity/transform for reveals (delete icon, row highlight), disabled under prefers-reduced-motion.
+	•	No auto‑scroll unless explicitly requested (e.g., after dedupe we scroll to existing row and briefly highlight).
+
+1.3 Microcopy tone
+	•	Short, neutral, factual. Avoid humor. Units always explicit (°C, mm, %).
+
+⸻
+
+2) Local Time — inline edit (What‑if mode)
+
+Component: LocalTimeControl + baseline state hook.
+Goal: Let users edit their local time (24h) and see all city times re‑computed for that instant.
+
+2.1 Non‑editing state
+	•	Display: HH:mm (24h), mono, large (text-3xl, font-semibold).
+	•	Activation:
+	•	Click the time → switches to editing.
+	•	Keyboard: when focused, Enter or Space → editing.
+	•	Announcement: Hidden label aria-label="My local time".
+
+2.2 Editing state
+	•	Control: Single‑line input (type="text", width ~6ch, mono).
+	•	Mask & assistance:
+	•	Accepts HH:MM, H:MM, HHMM, HMM (smart parse).
+	•	Automatically inserts : after 2 digits (if not present).
+	•	Auto‑pad leading zero on commit (e.g., 9:5 → 09:05).
+	•	Validation (on change + on commit):
+	•	Hours: 00–23; Minutes: 00–59.
+	•	Invalid input shows an inline hint beneath input (small, red):
+“Enter time as 00:00–23:59”
+	•	Commit:
+	•	Enter → if valid: set baseline (setByLocalTimeHHmm), exit editing, enter What‑if mode.
+	•	Escape → cancel edit, revert to previous value, exit editing.
+	•	Blur → commit if valid; else revert and exit.
+	•	What‑if mode UI:
+	•	Show “Reset to now” button to the right.
+	•	Optional subtle chip: “What‑if time active” near header (muted).
+	•	Persist across reloads (stored via overrideISO).
+
+Microcopy
+	•	Tooltip on time (non‑editing): “Click to change local time”
+	•	Button: “Reset to now”
+
+A11y
+	•	Input aria-describedby="time-format-hint" when invalid.
+	•	Announce activation with aria-live="polite" toast:
+“Showing times as if it were 21:15 locally.”
+
+2.3 Acceptance
+	•	Typing 915 → renders 09:15 after Enter.
+	•	25:00 rejected with inline hint; value not committed.
+	•	“Reset to now” returns to live time; chip disappears; localStorage cleared.
+
+⸻
+
+3) City list interactions
+
+Components: CityList, CityRow, WeatherCell, PhaseIcon.
+
+3.1 Row anatomy
+	•	Columns: City (name, country) · Time (icon + HH:mm) · Weather (precip + °C) + Delete affordance.
+	•	Row hover: shows Delete button (lucide Trash2, ghost button).
+	•	Keyboard:
+	•	Tab targets the Delete button directly (not the whole row).
+	•	When Delete is focused, it is visible even without hover (use focus:opacity-100).
+	•	Click targets: City name is not a button (keeps list calm); only the Delete icon and Add city are interactive in rows.
+
+3.2 Delete flow (with Undo)
+	•	Trigger: Click Delete or press Enter/Space on focused Delete.
+	•	Effect:
+	1.	Row is optimistically removed from DOM.
+	2.	Toast appears (5s):
+“Removed {City}.” [Undo]
+	•	Undo:
+	•	Clicking Undo reinserts at the same index; toast closes.
+	•	Focus after delete:
+	•	If a next row exists → focus its Delete button.
+	•	Else if previous row exists → focus its Delete button.
+	•	Else → focus Add city button.
+	•	Edge: If the removed city reappears (Undo) while the list scrolled, keep its position stable.
+
+A11y
+	•	Delete button aria-label="Remove {City}".
+	•	Toast region role="status" (polite). Undo is a real button in the toast.
+
+Microcopy
+	•	Toast title text: “Removed London.”
+	•	Undo label: “Undo”
+
+Acceptance
+	•	Pressing Tab → Delete button becomes visible without mouse.
+	•	Undo restores row at original index.
+
+⸻
+
+4) Add City dialog
+
+Component: AddCityDialog (shadcn ui dialog + search).
+
+4.1 Opening
+	•	Click ➕ Add city at end of the list (primary entry).
+	•	Optional keyboard shortcut: Ctrl/Cmd + K opens dialog (if you want power‑user affordance). Keep discoverable via button.
+
+4.2 Dialog behavior
+	•	Focus trap: Initial focus on search input; pressing Escape closes dialog (returns focus to Add city button).
+	•	Search:
+	•	Debounced 300ms after last keypress.
+	•	Enabled only when input length > 1.
+	•	While fetching: show “Searching…” status row.
+	•	Results in a scrollable list, max height ~256px.
+	•	Results list semantics:
+	•	Container role="listbox", each item role="option", aria-selected.
+	•	Keyboard:
+	•	Arrow Down/Up to move active option (roving index; default first).
+	•	Enter selects active option.
+	•	Home/End jump to start/end.
+	•	Selecting a result:
+	•	Close dialog.
+	•	Deduping: If the city already exists (same id or same name+lat+lon), do not add; instead:
+	•	Close dialog,
+	•	Scroll the list to the existing row,
+	•	Apply a temporary highlight (e.g., 1200ms background tint),
+	•	Show toast: “Paris is already in your list.”
+	•	If new:
+	•	Prefetch weather (we wired this in Chunk 3) to avoid a spinner,
+	•	Append to list,
+	•	Scroll it into view if off‑screen,
+	•	Optionally flash the row background for 600ms.
+	•	Closing:
+	•	Close button or Escape returns focus to Add city.
+	•	Query is cleared when the dialog closes (fresh on next open).
+
+Microcopy
+	•	Input placeholder: “Search city…”
+	•	Loading row: “Searching…”
+	•	Empty: “No results”
+	•	Dedup toast: “{City} is already in your list.”
+
+A11y
+	•	Dialog has aria-labelledby pointing at “Add a city”.
+	•	Each result announces {name}, {country}, {tz}.
+
+Acceptance
+	•	Typing “Par” → results appear; ArrowDown + Enter adds Paris.
+	•	Selecting an existing city triggers dedupe behavior + highlight.
+
+⸻
+
+5) Weather cell states
+
+Component: WeatherCell
+	•	Loading: em dash — (no spinner to avoid jitter), aria-label="Loading weather".
+	•	Success:
+	•	Precipitation displayed as % if precipProbability provided; otherwise mm if available; fallback —.
+	•	Temperature rounded Math.round(°C).
+	•	Example: 35% · 22°C
+	•	Tooltip/title: “Observed {relative time}, {source}”.
+	•	Error: exclamation ! + title="Weather unavailable" and aria-label="Weather unavailable".
+
+Refresh
+	•	Auto every 5 min; on window focus when stale; no UI jump (values crossfade 150ms).
+
+⸻
+
+6) Day‑phase icon
+
+Component: PhaseIcon + classifier
+	•	Mapping (already implemented):
+	•	sleep → Moon
+	•	early → Sunrise
+	•	day → Sun
+	•	evening → Sunset
+	•	night → MoonStar
+	•	Placement: Left of time; size 20px; aria-label equals phase text.
+	•	Color: Inherit current text color; no semantic color changes between phases (avoids misreading).
+
+⸻
+
+7) Local (IP) weather banner
+	•	On first load, attempt IP lookup for local weather. If it fails or is blocked:
+	•	Show dismissible info banner at top for the session:
+“We couldn’t determine your location by IP. You can still add cities manually.”
+	•	Close persists for session (not stored permanently).
+
+⸻
+
+8) Shortcuts (optional, safe defaults off)
+
+If you want keyboard power‑user features:
+	•	R when LocalTimeControl has focus → Reset to now.
+	•	Ctrl/Cmd + K anywhere → Open Add city.
+	•	Disabled by default; enable behind a simple preference toggle if desired.
+
+⸻
+
+9) Accessibility checklist
+	•	Interactive controls reachable by Tab; hover‑only affordances also appear on focus.
+	•	Color contrast: text/icons ≥ WCAG AA at body background.
+	•	ARIA:
+	•	LocalTimeControl input labeled, with hint on invalid.
+	•	Toast region role="status"; messages concise.
+	•	Dialog: aria-modal="true", labelled by the title.
+	•	Results list uses role="listbox" / role="option", with aria-selected.
+	•	Reduced motion: disable highlights/animations; replace with instant state changes.
+	•	Units spoken: Include units in aria-labels (“22 degrees Celsius”, “35 percent chance of precipitation”).
+
+⸻
+
+10) Visual & spacing tokens
+	•	Row: px-3 py-3, grid grid-cols-[1fr_auto_auto], gap-4.
+	•	Time: font-mono tabular-nums text-2xl md:text-3xl font-semibold.
+	•	City: name text-base font-semibold; country text-xs text-neutral-500.
+	•	Weather: value text-sm; temperature font-medium.
+	•	Delete: ghost icon button, opacity-0 group-hover:opacity-100 focus:opacity-100.
+	•	Section header row: small caps: text-xs uppercase tracking-wide text-neutral-500.
+
+⸻
+
+11) State machines (concise)
+
+11.1 LocalTimeControl
+Idle ──(click/Enter)──> Editing
+Editing ──(Enter valid)──> WhatIfActive
+Editing ──(Escape/Blur invalid)──> Idle (unchanged)
+WhatIfActive ──(Reset)──> Idle
+
+11.2 AddCityDialog
+Closed ──(open)──> Open
+Open ──(type)──> Searching (debounced)
+Searching ──(results)──> Results
+Results ──(Enter/Click on option)──> (Dedupe? Yes→Scroll+Toast | No→Add)
+Any ──(Escape/Close)──> Closed (return focus)
+
+11.3 Delete with Undo
+Visible ──(Delete)──> Removed (Toast active)
+Removed ──(Undo within 5s)──> Visible
+Removed ──(Timeout)──> Committed removal
+
+12) Copy deck (exact strings)
+	•	Local time section label: “My local time”
+	•	Time input placeholder: “HH:MM”
+	•	Invalid hint: “Enter time as 00:00–23:59”
+	•	What‑if toast (polite): “Showing times as if it were {HH:mm} locally.”
+	•	Reset button: “Reset to now”
+	•	Column headers: “City”, “Time”, “Weather”
+	•	Add action: “➕ Add city”
+	•	Search placeholder: “Search city…”
+	•	Searching row: “Searching…”
+	•	No results: “No results”
+	•	Dedupe toast: “{City} is already in your list.”
+	•	Remove toast: “Removed {City}.” (action: “Undo”)
+	•	IP fail banner: “We couldn’t determine your location by IP. You can still add cities manually.”
+	•	Weather error title/aria: “Weather unavailable”
+
+⸻
+
+13) Edge cases & rules
+	•	Duplicate cities: Equality by id OR (name, lat, lon); attempting to add duplicates invokes dedupe behavior (scroll + toast).
+	•	DST changes: Delegated to Intl; no custom offset math.
+	•	Empty list (all deleted): Show an empty state with centered illustration & “Add your first city”.
+	•	Network offline: Toast “You’re offline. We’ll retry automatically.” Weather cells show last cached values when present.
+	•	Very long city names: Truncate with ellipsis; full name on title attribute.
+	•	Touch devices: Delete button visible on row press (no hover); also always visible when row is focused.
+
+⸻
+
+14) QA acceptance scenarios (executable test ideas)
+	1.	Inline edit happy path
+	•	Click time → type 0915 → Enter → all city times update; “Reset to now” appears.
+	2.	Inline edit invalid
+	•	Type 99:99 → Enter → error hint; remains in edit until Escape or blur; value not committed.
+	3.	Undo delete
+	•	Delete Seoul → toast appears → Undo within 5s → Seoul row reappears at same index; focus restored to its Delete.
+	4.	Add city with keyboard
+	•	Open dialog → type “del” → ArrowDown → Enter → city added; dialog closes; new row visible with no spinner.
+	5.	Dedup
+	•	Try adding London again → dialog closes; list scrolls to London; row highlights; toast informs dedupe.
+	6.	IP fail
+	•	Simulate blocked IP call → info banner appears; dismiss once; banner stays dismissed for this session.
+	7.	Reduced motion
+	•	With prefers-reduced-motion set, highlight and reveal animations disable; states change instantly.
+
+⸻
+
+15) Implementation pointers (minimal code you’ll need)
+	•	Smart parse (input → HH:mm): strip non‑digits, if 3–4 digits, insert : at length−2, then clamp ranges; pad with zeros on commit.
+	•	Row highlight: apply a class (e.g., bg-amber-50) for 1200ms; remove via setTimeout, no opacity animation when reduced motion.
+	•	Scroll to row: element.scrollIntoView({ block: 'center', behavior: prefersReducedMotion ? 'auto' : 'smooth' }).
+
+⸻
+
+16) “Done means done” checklist (for sign‑off)
+	•	Keyboard can complete all flows without mouse.
+	•	Hover‑only delete is also visible on focus.
+	•	What‑if mode persists and is clearly dismissible.
+	•	Duplicate adds do not create multiple entries.
+	•	Weather never blocks interaction; errors are quiet but discoverable.
+	•	Text contrast and focus rings meet WCAG AA.
+	•	Reduced motion respected.
