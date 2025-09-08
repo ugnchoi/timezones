@@ -34,13 +34,6 @@ function useChart() {
   return context
 }
 
-type TooltipFormatter<TValue, TName> = (
-  value: TValue,
-  name: TName,
-  item: Payload<TValue, TName>,
-  index: number,
-  payload: Payload<TValue, TName>[]
-) => React.ReactNode
 
 type Payload<TValue = number, TName = string> = {
   [key: string]: unknown
@@ -121,7 +114,7 @@ ${colorConfig
 
 const ChartTooltip = RechartsPrimitive.Tooltip
 
-function ChartTooltipContent<TValue extends number, TName extends string>({
+function ChartTooltipContent({
   active,
   payload,
   className,
@@ -135,14 +128,27 @@ function ChartTooltipContent<TValue extends number, TName extends string>({
   color,
   nameKey,
   labelKey,
-}: RechartsPrimitive.TooltipProps<TValue, TName> & {
-    hideLabel?: boolean
-    hideIndicator?: boolean
-    indicator?: "line" | "dot" | "dashed"
-    nameKey?: string
-    labelKey?: string
-    formatter?: TooltipFormatter<TValue, TName>
-  }) {
+}: {
+  active?: boolean
+  payload?: Array<{
+    name?: string
+    value?: number
+    dataKey?: string
+    payload?: Record<string, unknown>
+    color?: string
+  }>
+  className?: string
+  indicator?: "line" | "dot" | "dashed"
+  hideLabel?: boolean
+  hideIndicator?: boolean
+  label?: string
+  labelFormatter?: (value: unknown, payload: unknown[]) => React.ReactNode
+  labelClassName?: string
+  formatter?: (value: number, name: string, item: unknown) => React.ReactNode
+  color?: string
+  nameKey?: string
+  labelKey?: string
+}) {
   const { config } = useChart()
 
   const tooltipLabel = React.useMemo(() => {
@@ -196,10 +202,10 @@ function ChartTooltipContent<TValue extends number, TName extends string>({
     >
       {!nestLabel ? tooltipLabel : null}
       <div className="grid gap-1.5">
-        {payload.map((item, index) => {
+        {payload.map((item) => {
           const key = `${nameKey || item.name || item.dataKey || "value"}`
           const itemConfig = getPayloadConfigFromPayload(config, item, key)
-          const indicatorColor = color || item.payload.fill || item.color
+          const indicatorColor = color || item.payload?.fill || item.color
 
           return (
             <div
@@ -210,7 +216,7 @@ function ChartTooltipContent<TValue extends number, TName extends string>({
               )}
             >
               {formatter && item?.value !== undefined && item.name ? (
-                formatter(item.value, item.name, item, index, item.payload)
+                formatter(item.value, item.name, item)
               ) : (
                 <>
                   {itemConfig?.icon ? (
@@ -310,7 +316,7 @@ function ChartLegendContent<TValue extends number, TName extends string>({
               <div
                 className="h-2 w-2 shrink-0 rounded-[2px]"
                 style={{
-                  backgroundColor: item.color,
+                  backgroundColor: item.color as string,
                 }}
               />
             )}

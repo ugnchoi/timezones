@@ -64,7 +64,11 @@ export function CityTimeRadialChart({ cities, instant }: CityTimeRadialChartProp
         }
       })
       .sort((a, b) => a.sortKey - b.sortKey) // Sort by time percentage (00:00 to 23:59)
-      .map(({ sortKey, ...cityData }) => cityData), // Remove sortKey from final data
+      .map((item) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { sortKey, ...cityData } = item
+        return cityData
+      }), // Remove sortKey from final data
     // Single reference bar (completely transparent) - moved to the end
     {
       city: "", // Empty string so no label shows
@@ -124,8 +128,9 @@ export function CityTimeRadialChart({ cities, instant }: CityTimeRadialChartProp
                 <ChartTooltipContent 
                   hideLabel 
                   nameKey="city"
-                  formatter={(value: number, name: string, item: { payload: { city: string; country: string; actualTime: string } }) => {
-                    const data = item.payload
+                  formatter={(value: number, name: string, item: unknown) => {
+                    if (!item || typeof item !== 'object' || !('payload' in item)) return null
+                    const data = (item as { payload: { city: string; country: string; actualTime: string } }).payload
                     return (
                       <div className="flex flex-col gap-1">
                         <div className="font-medium">{data.city}</div>

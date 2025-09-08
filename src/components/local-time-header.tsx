@@ -39,7 +39,6 @@ export function LocalTimeHeader({ currentTime, onTimeChange, onReset }: LocalTim
           <TimePicker
             currentTime={nowOverride || currentTime}
             onTimeChange={handleTimeChange}
-            onReset={handleReset}
             isEditing={isEditing}
             onToggleEdit={() => setIsEditing(!isEditing)}
           />
