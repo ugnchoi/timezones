@@ -23,7 +23,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           disableTransitionOnChange
         >
           <QueryProvider>
-            {children}
+            <div className="min-h-screen flex flex-col">
+              <div className="flex-1">
+                {children}
+              </div>
+              <footer className="py-6 text-center">
+                <p className="text-xs text-muted-foreground/60">
+                  Vibe coded by Yoojin C.
+                </p>
+              </footer>
+            </div>
           </QueryProvider>
         </ThemeProvider>
       </body>

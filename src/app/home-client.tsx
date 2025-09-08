@@ -40,7 +40,7 @@ export default function HomeClient() {
 
   
   return (
-    <div className="min-h-screen relative">
+    <div className="relative">
       <MapBackground cities={cities} hoveredId={hoveredId} dim={0.3} />
       <main className="relative z-10 container max-w-2xl mx-auto px-6 py-6 md:py-6 my-8 md:my-6 space-y-8 md:space-y-6">
       {/* Tab Navigation */}
