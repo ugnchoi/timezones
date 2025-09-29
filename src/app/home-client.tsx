@@ -6,6 +6,7 @@ import { CityList } from '@/components/CityList';
 import { AddCityDialog } from '@/components/AddCityDialog';
 import { LocalTimeControl } from '@/components/LocalTimeControl';
 import { RadialView } from '@/components/RadialView';
+import { TimelineView } from '@/components/TimelineView';
 import { MapBackground } from '@/components/MapBackground';
 import { useCityStore } from '@/state/cityStore';
 import { useBaselineInstant } from '@/state/baseline';
@@ -23,7 +24,7 @@ const DEFAULTS: City[] = [
   { id: 'syd', name: 'Sydney',        country: 'Australia',      lat: -33.8688, lon: 151.2093, tz: 'Australia/Sydney',     builtIn: true },
 ];
 
-type TabType = 'timezones' | 'test' | 'map-test';
+type TabType = 'timezones' | 'radial' | 'timeline';
 
 export default function HomeClient() {
   const { cities, addCity, removeCity } = useCityStore(DEFAULTS);
@@ -55,12 +56,20 @@ export default function HomeClient() {
             Timezones
           </Button>
           <Button
-            variant={activeTab === 'test' ? 'default' : 'ghost'}
+            variant={activeTab === 'radial' ? 'default' : 'ghost'}
             size="sm"
-            onClick={() => setActiveTab('test')}
+            onClick={() => setActiveTab('radial')}
             className="px-4"
           >
             Radial View
+          </Button>
+          <Button
+            variant={activeTab === 'timeline' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('timeline')}
+            className="px-4"
+          >
+            Timeline
           </Button>
              </div>
       </nav>
@@ -114,8 +123,12 @@ export default function HomeClient() {
         </>
       )}
 
-      {activeTab === 'test' && (
+      {activeTab === 'radial' && (
         <RadialView cities={cities} instant={instant} />
+      )}
+
+      {activeTab === 'timeline' && (
+        <TimelineView cities={cities} instant={instant} />
       )}
 
 
