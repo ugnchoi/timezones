@@ -25,7 +25,7 @@ export function CityRow({ city, instant, onRemove, onHover, className, 'data-cit
   return (
     <div
       className={cn(
-        'group grid grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_minmax(140px,1fr)_40px] md:grid-cols-[minmax(0,1fr)_120px_180px_40px] items-center',
+        'group grid grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_40px] sm:grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_minmax(140px,1fr)_40px] md:grid-cols-[minmax(0,1fr)_120px_180px_40px] items-center',
         'gap-2 px-2 py-4 sm:py-0 sm:h-30',
         'bg-background/50 hover:bg-muted/40 transition-colors',
         isBusinessTime && 'bg-accent/65',
@@ -65,7 +65,7 @@ export function CityRow({ city, instant, onRemove, onHover, className, 'data-cit
       </div>
 
       {/* Weather (right-aligned) */}
-      <div role="cell" className="justify-self-end">
+      <div role="cell" className="hidden justify-self-end sm:block">
         <WeatherCell 
           lat={city.lat} 
           lon={city.lon} 

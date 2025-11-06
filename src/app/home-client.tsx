@@ -98,10 +98,10 @@ export default function HomeClient() {
 
           {/* Table header */}
           <section>
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_minmax(140px,1fr)_40px] md:grid-cols-[minmax(0,1fr)_120px_180px_40px] gap-2 px-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_40px] sm:grid-cols-[minmax(0,1fr)_minmax(96px,1fr)_minmax(140px,1fr)_40px] md:grid-cols-[minmax(0,1fr)_120px_180px_40px] gap-2 px-2">
               <div className="text-xs uppercase tracking-wide text-muted-foreground">City</div>
               <div className="text-xs uppercase tracking-wide text-muted-foreground text-center">Time</div>
-              <div className="text-xs uppercase tracking-wide text-muted-foreground text-right">Weather</div>
+              <div className="hidden text-xs uppercase tracking-wide text-muted-foreground text-right sm:block">Weather</div>
               <div className="text-xs uppercase tracking-wide text-muted-foreground text-center"></div>
             </div>
             <Separator className="mt-2" />
