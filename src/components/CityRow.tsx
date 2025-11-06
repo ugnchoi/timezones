@@ -79,7 +79,7 @@ export function CityRow({ city, instant, onRemove, onHover, className, 'data-cit
           variant="ghost" 
           size="icon" 
           aria-label={`Remove ${city.name}`}
-          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity h-8 w-8"
+          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100 transition-opacity h-8 w-8"
           onClick={() => onRemove?.(city.id)}
         >
           <Minus className="h-4 w-4" />
