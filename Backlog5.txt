@@ -1,0 +1,295 @@
+1) Design tokens (CSS variables + Tailwind)
+
+Why: keep the visual system cohesive and easy to tweak without touching components.
+
+1.1 globals.css (tokens & base) - done
+
+1.2 tailwind.config.ts
+// tailwind.config.ts
+import type { Config } from 'tailwindcss';
+
+const config: Config = {
+  darkMode: ['class'],
+  content: ['./app/**/*.{ts,tsx}', './src/**/*.{ts,tsx}'],
+  theme: {
+    container: { center: true, padding: '1rem', screens: { '2xl': '1024px' } }, // airy, not too wide
+    extend: {
+      colors: {
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
+        accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
+        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+      boxShadow: {
+        sm: 'var(--shadow-sm)',
+        md: 'var(--shadow-md)',
+      },
+      fontFamily: {
+        // set by next/font in layout (see below)
+        sans: ['var(--font-sans)', 'system-ui', 'ui-sans-serif'],
+        mono: ['var(--font-mono)', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+      },
+    },
+  },
+  plugins: [require('tailwindcss-animate')],
+};
+export default config;
+
+
+1.3 Typography scale (usage guidance)
+	•	Time (mono): text-3xl mobile → text-4xl ≥ md, font-semibold, tabular-nums.
+	•	City name: text-base md:text-lg font-semibold.
+	•	Weather: text-sm for precipitation, text-base font-medium for temperature.
+	•	Headers: text-xs uppercase tracking-wide text-muted-foreground.
+
+⸻
+
+2) Fonts (mono emphasis for time)
+
+Load with Next.js for performance and consistent fallbacks.
+// app/layout.tsx
+import './globals.css';
+import { QueryProvider } from '@/lib/queryClient';
+import { Toaster } from 'sonner';
+import { Inter, JetBrains_Mono } from 'next/font/google';
+
+const sans = Inter({ subsets: ['latin'], variable: '--font-sans' });
+const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mono' });
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${sans.variable} ${mono.variable} font-sans`}>
+        <QueryProvider>
+          {children}
+          <Toaster position="bottom-center" richColors toastOptions={{ duration: 5000 }} />
+        </QueryProvider>
+      </body>
+    </html>
+  );
+}
+
+3) shadcn/ui primitives you’ll need
+
+Generate once (CLI) to src/components/ui/*:
+	•	button, dialog, input, tooltip, separator, label, toast (or sonner), popover (if you later use a time picker).
+These give you accessible, composable building blocks matching the token system.
+
+⸻
+
+4) Page composition (structure & classes)
+
+This is a visual assembly using our components from Chunks 2–4.
+// app/home-client.tsx  (Client component; used by app/page.tsx server wrapper if you SSR-hydrate)
+'use client';
+
+import * as React from 'react';
+import type { City } from '@/types';
+import { CityList } from '@/components/CityList';
+import { AddCityDialog } from '@/components/AddCityDialog';
+import { LocalTimeControl } from '@/components/LocalTimeControl';
+import { useCityStore } from '@/state/cityStore';
+import { useBaselineInstant } from '@/state/baseline';
+import { Separator } from '@/components/ui/separator';
+import { Info } from 'lucide-react';
+
+const DEFAULTS: City[] = [
+  { id: 'ldn', name: 'London',        lat: 51.5074, lon: -0.1278, tz: 'Europe/London',         builtIn: true },
+  { id: 'nyc', name: 'New York',      lat: 40.7128, lon: -74.0060, tz: 'America/New_York',     builtIn: true },
+  { id: 'sfo', name: 'San Francisco', lat: 37.7749, lon: -122.4194, tz: 'America/Los_Angeles', builtIn: true },
+  { id: 'del', name: 'Delhi',         lat: 28.6139, lon: 77.2090,   tz: 'Asia/Kolkata',        builtIn: true },
+  { id: 'sel', name: 'Seoul',         lat: 37.5665, lon: 126.9780,  tz: 'Asia/Seoul',          builtIn: true },
+];
+
+export default function HomeClient() {
+  const { cities, addCity, removeCity } = useCityStore(DEFAULTS);
+  const { instant, setByLocalTimeHHmm, reset, overrideISO } = useBaselineInstant();
+  const [openAdd, setOpenAdd] = React.useState(false);
+
+  const localHHmm = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }).format(instant);
+
+  return (
+    <main className="container max-w-3xl py-8 md:py-10 space-y-8">
+      {/* Header */}
+      <header className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">My local time</div>
+          <LocalTimeControl
+            hhmm={localHHmm}
+            whatIfActive={!!overrideISO}
+            onChangeHHmm={setByLocalTimeHHmm}
+            onReset={reset}
+          />
+        </div>
+      </header>
+
+      {/* Optional Info banner for IP failures (render conditionally) */}
+      {/* <aside className="rounded-md border bg-muted p-3 text-sm flex items-start gap-2">
+        <Info className="mt-0.5 h-4 w-4 text-muted-foreground" />
+        <span>We couldn’t determine your location by IP. You can still add cities manually.</span>
+      </aside> */}
+
+      {/* Table header */}
+      <section>
+        <div className="grid grid-cols-[1fr_auto_auto] items-end gap-4 px-3">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">City</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Time</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Weather</div>
+        </div>
+        <Separator className="my-2" />
+
+        {/* Rows */}
+        <CityList
+          cities={cities}
+          instant={instant}
+          onAdd={() => setOpenAdd(true)}
+          onRemove={removeCity}
+          className="divide-y divide-border rounded-lg border shadow-sm"
+        />
+      </section>
+
+      {/* Add dialog */}
+      <AddCityDialog open={openAdd} onOpenChange={setOpenAdd} onSelect={addCity} />
+    </main>
+  );
+}
+
+Notes
+	•	Whitespace: max-w-3xl + generous py and space-y.
+	•	Calm hierarchy: headers in muted small caps; big mono time; thin dividers.
+	•	Containment: rows live in a subtle card (rounded-lg border shadow-sm).
+
+⸻
+
+
+5) Row composition (visual)
+
+Already covered functionally in Chunk 2; here’s the visual guidance you can apply to your existing CityRow:
+
+// src/components/CityRow.tsx (visual adjustments only)
+<div
+  className={cn(
+    'group grid grid-cols-[1fr_auto_auto] items-center gap-4 px-3 py-3',
+    'bg-background hover:bg-muted/40 transition-colors',
+  )}
+  role="row"
+>
+  {/* City */}
+  <div role="cell" className="truncate">
+    <div className="text-base md:text-lg font-semibold truncate">{city.name}</div>
+    {city.country && <div className="text-xs text-muted-foreground truncate">{city.country}</div>}
+  </div>
+
+  {/* Time */}
+  <div role="cell">
+    <TimeCell
+      tz={city.tz}
+      instant={instant}
+      timeClassName="font-mono tabular-nums text-2xl md:text-3xl font-semibold"
+      iconClassName="h-5 w-5"
+    />
+  </div>
+
+  {/* Weather + Delete */}
+  <div role="cell" className="flex items-center gap-2 md:gap-3 justify-self-end">
+    <WeatherCell lat={city.lat} lon={city.lon} className="text-sm md:text-base" />
+    <Button
+      variant="ghost" size="icon" aria-label={`Remove ${city.name}`}
+      className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+      onClick={() => onRemove?.(city.id)}
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  </div>
+</div>
+
+	•	Row hover subtly lifts background (hover:bg-muted/40), not the whole card.
+	•	Delete remains discoverable by keyboard (focus styles keep it visible).
+
+6) Empty state & micro‑states
+
+6.1 Empty state (all rows deleted, first‑run)
+
+export function EmptyState({ onAdd }: { onAdd: () => void }) {
+  return (
+    <div className="rounded-lg border shadow-sm p-10 text-center space-y-3">
+      <div className="text-base text-muted-foreground">Add cities to see local time & weather.</div>
+      <Button onClick={onAdd}>➕ Add your first city</Button>
+    </div>
+  );
+}
+
+Use this in place of <CityList> when cities.length === 0.
+
+6.2 Loading skellies (optional)
+
+If you choose to prefetch via SSR (Chunk 3), you’ll barely see loading. If not:
+
+function RowSkeleton() {
+  return (
+    <div className="grid grid-cols-[1fr_auto_auto] items-center gap-4 px-3 py-3 animate-pulse">
+      <div>
+        <div className="h-4 w-28 rounded bg-muted" />
+        <div className="mt-2 h-3 w-20 rounded bg-muted" />
+      </div>
+      <div className="h-7 w-16 rounded bg-muted justify-self-start" />
+      <div className="h-5 w-24 rounded bg-muted justify-self-end" />
+    </div>
+  );
+}
+
+7) Visual rhythm & spacing rules
+	•	Container: max-w-3xl avoids line‑length fatigue while keeping focus on numbers.
+	•	Grid: grid-cols-[1fr_auto_auto] ensures city names get space; time and weather hug content.
+	•	Dividers: Use Separator above the list; per‑row dividers via divide-y divide-border on the wrapper.
+	•	Padding: Rows px-3 py-3. Header row px-3.
+	•	Motion: Only small opacity/color transitions (150–200ms). Respect prefers-reduced-motion.
+
+⸻
+
+8) Color & contrast (WCAG AA quick checks)
+	•	Text vs background: foreground on background is AA by design in the token set.
+	•	Muted labels: text-muted-foreground remains ≥ 4.5:1 on background.
+	•	Interactive states: buttons rely on underline/shape and focus ring (not color alone).
+
+⸻
+
+9) Iconography
+	•	lucide icons: Moon, Sunrise, Sun, Sunset, MoonStar.
+	•	Size 20px in rows, 16px in banners.
+	•	Use the same color as surrounding text for cohesion; no semantic color switching across phases.
+
+    10) Utilities
+
+If you’re following shadcn patterns, include the common cn helper:
+
+// src/lib/cn.ts
+import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+export function cn(...inputs: any[]) { return twMerge(clsx(inputs)); }
+
+
+11) Visual acceptance checklist
+	•	Time is clearly dominant (mono, larger weight).
+	•	City names never wrap (truncate, full name on title).
+	•	Rows feel airy; no cramped columns at sm sizes.
+	•	Hover affordances are subtle; focus states are obvious.
+	•	Delete is visible on focus (not hover only).
+	•	Weather numbers are legible but secondary.
+
+⸻
+
+12) What’s ready to build now
+	•	Tokens + Tailwind theme wired.
+	•	Fonts optimized & ready (Inter + JetBrains Mono).
+	•	A clean, minimal page composition using your existing components.
+	•	Empty state and skellies to keep the experience elegant at every moment.

@@ -1,0 +1,384 @@
+12) Build & setup checklist
+	1.	Create project (Next.js or Vite) with TypeScript.
+	2.	Install Tailwind and shadcn/ui; generate components.json; pull Dialog, Button, Table, Input, Toast/sonner, Tooltip.  ￼
+	3.	Install lucide-react (icons) and @tanstack/react-query.  ￼ ￼
+	4.	Add a QueryClientProvider at the app root.  ￼
+	5.	Seed default cities; wire the IP lookup and Open‑Meteo calls.  ￼ ￼
+
+⸻
+
+13) Security & privacy
+	•	No PII stored; coordinates are transient and only persisted per chosen city.
+	•	IP lookup is a simple client GET; document this in the site’s privacy note (“We call ipapi.co to infer your city and coordinates”).  ￼
+
+
+API request layer & TanStack Query integration (v1).
+This adds a robust data layer with clear query keys, fetchers that support cancellation, sensible caching/refresh policies, and SSR hydration for Next.js (App Router).
+
+Why TanStack Query here?
+	•	Modern v5 object‑style APIs (useQuery({...})) with gcTime, staleTime, etc.  ￼
+	•	Root provider via QueryClientProvider.  ￼
+	•	AbortSignal is passed to each queryFn for cancellation.  ￼ ￼
+	•	SSR prefetching + HydrationBoundary to avoid loading states.  ￼
+	•	Retry/backoff and window‑focus revalidation defaults are predictable and configurable.  ￼
+
+
+0) Install (if not yet)
+pnpm add @tanstack/react-query @tanstack/react-query-devtools
+
+1) Query client & provider
+
+Create src/lib/queryClient.tsx:
+// src/lib/queryClient.tsx
+'use client';
+import * as React from 'react';
+import {
+  QueryClient,
+  QueryClientProvider,
+} from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+
+function makeQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        // All queries are stale by default; override per-query below
+        staleTime: 0,
+        gcTime: 30 * 60 * 1000, // 30m in cache before GC
+        refetchOnWindowFocus: true, // will only fire if stale
+        retry: 2,
+        retryDelay: (attempt) => Math.min(2000 * 2 ** attempt, 10000),
+      },
+    },
+  });
+}
+
+let browserQueryClient: QueryClient | undefined;
+
+export function getQueryClient() {
+  if (typeof window === 'undefined') {
+    // Server: always make a new client
+    return makeQueryClient();
+  }
+  // Client: reuse across renders
+  return (browserQueryClient ??= makeQueryClient());
+}
+
+export function QueryProvider({ children }: { children: React.ReactNode }) {
+  const client = getQueryClient();
+  return (
+    <QueryClientProvider client={client}>
+      {children}
+      <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+  );
+}
+
+In Next.js App Router, wrap your app in app/layout.tsx:
+// app/layout.tsx
+import { QueryProvider } from '@/lib/queryClient';
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en"><body><QueryProvider>{children}</QueryProvider></body></html>
+  );
+}
+
+QueryClientProvider is the root context for all useQuery hooks.  ￼
+
+
+2) HTTP helpers (typed fetch + error mapping + cancellation)
+
+Create src/lib/http.ts:
+// src/lib/http.ts
+export class HttpError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public url: string,
+    public body?: unknown
+  ) {
+    super(message);
+  }
+}
+
+export async function getJSON<T>(
+  url: string,
+  opts?: { signal?: AbortSignal }
+): Promise<T> {
+  const res = await fetch(url, { signal: opts?.signal });
+  if (!res.ok) {
+    let body: unknown = undefined;
+    try { body = await res.json(); } catch { /* ignore */ }
+    throw new HttpError(`GET ${url} failed`, res.status, url, body);
+  }
+  return res.json() as Promise<T>;
+}
+
+
+
+3) Query keys (stable & typed)
+
+Create src/lib/queryKeys.ts:
+// src/lib/queryKeys.ts
+export const qk = {
+  ipLocal: ['ip', 'local'] as const,
+  geoSearch: (q: string) => ['geo', 'search', q] as const,
+  weather: (lat: number, lon: number) => ['weather', { lat, lon }] as const,
+};
+
+
+Query keys uniquely identify cached entries; v5’s object signature for hooks takes queryKey and queryFn.  ￼
+
+4) Fetchers (now with AbortSignal)
+
+Update src/lib/api.ts to use the shared HTTP helper and support cancellation:
+
+// src/lib/api.ts
+import { getJSON } from '@/lib/http';
+import type { CurrentWeather, GeoSearchResult, IpLocation } from '@/types';
+
+export async function fetchIpLocation(signal?: AbortSignal): Promise<IpLocation> {
+  const j = await getJSON<any>('https://ipapi.co/json/', { signal });
+  return {
+    city: j.city ?? undefined,
+    lat: Number(j.latitude),
+    lon: Number(j.longitude),
+    tz: String(j.timezone),
+  };
+}
+
+export async function searchCitiesByName(query: string, signal?: AbortSignal): Promise<GeoSearchResult[]> {
+  if (!query?.trim()) return [];
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+  url.searchParams.set('name', query);
+  url.searchParams.set('count', '5');
+  url.searchParams.set('language', 'en');
+  const j = await getJSON<any>(url.toString(), { signal });
+  return (j.results ?? []).map((r: any) => ({
+    id: String(r.id ?? `${r.name}-${r.country_code}-${r.latitude}-${r.longitude}`),
+    name: r.name,
+    country: r.country,
+    lat: r.latitude,
+    lon: r.longitude,
+    tz: r.timezone,
+  }));
+}
+
+export async function fetchCurrentWeather(lat: number, lon: number, signal?: AbortSignal): Promise<CurrentWeather> {
+  const url = new URL('https://api.open-meteo.com/v1/forecast');
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lon));
+  url.searchParams.set('current', 'temperature_2m,precipitation,precipitation_probability,weather_code');
+  url.searchParams.set('temperature_unit', 'celsius');
+  url.searchParams.set('precipitation_unit', 'mm');
+  url.searchParams.set('timezone', 'auto');
+  const j = await getJSON<any>(url.toString(), { signal });
+  const c = j.current ?? {};
+  return {
+    temperatureC: Number(c.temperature_2m ?? NaN),
+    precipMm: c.precipitation != null ? Number(c.precipitation) : undefined,
+    precipProbability: c.precipitation_probability != null ? Number(c.precipitation_probability) : undefined,
+    code: c.weather_code != null ? Number(c.weather_code) : undefined,
+    observedAtISO: String(c.time ?? new Date().toISOString()),
+  };
+}
+
+
+Passing signal down lets TanStack Query cancel HTTP requests when inputs change (e.g., user keeps typing in the search box).  ￼
+
+
+5) Reusable query options & hooks (v5)
+
+Create src/queries.ts:
+
+// src/queries.ts
+import {
+  useQuery,
+  useQueries,
+  useQueryClient,
+  queryOptions,
+  type UseQueryResult,
+} from '@tanstack/react-query';
+import { qk } from '@/lib/queryKeys';
+import { fetchIpLocation, searchCitiesByName, fetchCurrentWeather } from '@/lib/api';
+import type { CurrentWeather, GeoSearchResult, IpLocation } from '@/types';
+
+// ---- IP location (rarely changes) ----
+export const ipLocationQuery = queryOptions({
+  queryKey: qk.ipLocal,
+  queryFn: ({ signal }) => fetchIpLocation(signal),
+  staleTime: 12 * 60 * 60 * 1000, // 12h
+  gcTime: 24 * 60 * 60 * 1000,    // 24h
+});
+
+export function useIpLocation() {
+  return useQuery(ipLocationQuery);
+}
+
+// ---- City search (debounced input -> query enabled when q.length>1) ----
+export const geoSearchQuery = (q: string) => queryOptions({
+  queryKey: qk.geoSearch(q),
+  queryFn: ({ signal }) => searchCitiesByName(q, signal),
+  enabled: q.trim().length > 1,     // off for empty/short strings
+  staleTime: 60 * 60 * 1000,        // 1h: city metadata is stable
+  gcTime: 6 * 60 * 60 * 1000,       // 6h
+  retry: 1,
+});
+
+export function useGeoSearch(q: string) {
+  return useQuery(geoSearchQuery(q));
+}
+
+// ---- Weather per city (fresh enough, auto-refresh) ----
+export const weatherQuery = (lat: number, lon: number) => queryOptions({
+  queryKey: qk.weather(lat, lon),
+  queryFn: ({ signal }) => fetchCurrentWeather(lat, lon, signal),
+  staleTime: 5 * 60 * 1000,                 // 5m: "fresh window"
+  gcTime: 30 * 60 * 1000,                   // 30m cached
+  refetchOnWindowFocus: true,               // only if stale
+  refetchInterval: 5 * 60 * 1000,           // gently refresh if user stays
+  refetchIntervalInBackground: false,       // skip when tab not focused
+  retry: 2,
+  retryDelay: (attempt) => Math.min(1500 * 2 ** attempt, 8000),
+});
+
+// Hook for a single city
+export function useWeather(lat: number, lon: number) {
+  return useQuery(weatherQuery(lat, lon));
+}
+
+// Hook for many cities in parallel (optional alternative to per-row fetching)
+export function useWeatherForCities(
+  coords: Array<{ lat: number; lon: number }>
+): UseQueryResult<CurrentWeather, Error>[] {
+  return useQueries({
+    queries: coords.map(({ lat, lon }) => weatherQuery(lat, lon)),
+  });
+}
+
+// Prefetch helpers (for SSR or instant add-city UX)
+export function usePrefetchWeather() {
+  const qc = useQueryClient();
+  return (lat: number, lon: number) => qc.prefetchQuery(weatherQuery(lat, lon));
+}
+
+	•	useQuery({...}) is the v5 one‑object signature; gcTime is the v5 name for cache lifetime.  ￼
+	•	useQueries handles a dynamic array of queries (e.g., many cities).  ￼
+	•	Reasoning for refresh: window focus triggers background refetch only when data is stale, which we control with staleTime.  ￼
+	•	Default retry behavior & custom retryDelay are documented.  ￼
+
+
+6) Wiring the UI to queries (examples)
+
+A) WeatherCell (swap to TanStack Query)
+
+// src/components/WeatherCell.tsx
+import { useWeather } from '@/queries';
+
+export function WeatherCell({ lat, lon, className }: { lat: number; lon: number; className?: string }) {
+  const { data, isPending, isError } = useWeather(lat, lon);
+
+  if (isPending) return <div className={className}>—</div>;
+  if (isError || !data) return <div className={className} aria-live="polite">!</div>;
+
+  return (
+    <div className={className}>
+      <span className="text-sm">
+        {data.precipProbability != null ? `${Math.round(data.precipProbability)}%` :
+          data.precipMm != null ? `${data.precipMm.toFixed(1)}mm` : '—'}
+      </span>
+      <span className="mx-2 text-neutral-400">·</span>
+      <span className="font-medium">{Math.round(data.temperatureC)}°C</span>
+    </div>
+  );
+}
+
+
+B) AddCityDialog (prefetch for zero‑spinner add)
+// inside AddCityDialog pick()
+import { usePrefetchWeather } from '@/queries';
+
+// parent comp:
+const prefetchWeather = usePrefetchWeather();
+const pick = async (r: GeoSearchResult) => {
+  const city = { /* normalize as before */ };
+  await prefetchWeather(city.lat, city.lon); // warm the cache
+  onSelect(city);
+  onOpenChange(false);
+};
+
+
+prefetchQuery fills the cache so the newly added row renders immediately without a loading state.  ￼
+
+
+7) Next.js SSR (App Router) — optional but recommended polish
+
+Prefetch default cities on the server to remove initial spinners.
+
+Server component page:
+
+// app/page.tsx (server component)
+import { dehydrate } from '@tanstack/react-query';
+import { HydrationBoundary } from '@tanstack/react-query'; // re-exported by react-query (v5)
+import { getQueryClient } from '@/lib/queryClient';
+import { weatherQuery } from '@/queries';
+import Home from './home-client'; // your existing client page
+
+const DEFAULTS = [
+  { lat: 51.5074, lon: -0.1278 },        // London
+  { lat: 40.7128, lon: -74.0060 },       // New York
+  { lat: 37.7749, lon: -122.4194 },      // San Francisco
+  { lat: 28.6139, lon: 77.2090 },        // Delhi
+  { lat: 37.5665, lon: 126.9780 },       // Seoul
+];
+
+export default async function Page() {
+  const qc = getQueryClient();
+  await Promise.all(DEFAULTS.map(({ lat, lon }) => qc.prefetchQuery(weatherQuery(lat, lon))));
+  const state = dehydrate(qc);
+  return (
+    <HydrationBoundary state={state}>
+      <Home />
+    </HydrationBoundary>
+  );
+}
+
+
+
+dehydrate + HydrationBoundary are the canonical SSR hydration APIs in v5; the Advanced SSR guide covers App Router and streaming details.  ￼
+
+
+8) Policy decisions (tailored to this app)
+	•	Weather: staleTime=5m, refetchInterval=5m, refetchOnWindowFocus=true.
+	•	Users keeping the tab open still get a gentle refresh every ~5 minutes.
+	•	If they tab away and back after ≥5m, focus refetch brings it up to date.  ￼
+	•	IP location: staleTime=12h. It’s stable but not permanent (VPNs/travel).
+	•	Search: Debounced + enabled only when q.length>1 to avoid chatter; requests are auto‑cancelled as inputs change.  ￼
+	•	Retries: Conservative (2 attempts) with backoff; weather/search endpoints are reliable and idempotent.  ￼
+
+⸻
+
+9) Error strategy
+	•	All fetchers throw HttpError(status,url,body); component surfaces a compact error glyph and exposes accessible text.
+	•	You can add a Toast at page level for “network offline” or “service down”.
+	•	Query‑level overrides are possible (e.g., retry: false on geosearch if you want failures to be immediate).
+
+⸻
+
+10) Using useQueries vs one‑row‑one‑query
+
+Two good patterns:
+	1.	Per‑row query (current WeatherCell) — simplest; React Query dedupes parallel calls.
+	2.	Aggregate with useWeatherForCities(cities.map(c => ({lat:c.lat, lon:c.lon}))) and pass preload down to rows if you prefer centralized fetching.  ￼
+
+⸻
+
+11) Notes on defaults you might tune later
+	•	If you never want focus refetches (e.g., during usability tests), set global refetchOnWindowFocus:false; remember it only triggers when stale.  ￼
+	•	For Storybook or tests, supply an isolated QueryClientProvider per story/test. (General provider pattern shown in docs & community examples.)  ￼
+
+⸻
+
+12) Quick reference — what changed from v4 (so you don’t get tripped)
+	•	v5 uses a single object signature for hooks; prefer gcTime over the old cacheTime; isPending replaces some “loading” states.

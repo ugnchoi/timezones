@@ -1,0 +1,185 @@
+2) Key technical decisions
+
+2.1 Data sources
+	•	Weather: Open‑Meteo Forecast API; supports current conditions (temperature, precipitation, precipitation_probability) and Celsius units; accepts timezone=auto. No key required for non‑commercial usage.  ￼
+	•	City search (for Add City): Open‑Meteo Geocoding API (returns name, lat/lon, and the city’s IANA time zone).  ￼
+	•	Local weather by IP: ipapi.co/json/ returns city, lat/lon, and timezone client‑side (simple, no key for light use). We’ll fall back to browser geolocation if permission is granted (more precise), else IP.
+
+2.2 Time & time‑zones
+	•	Use the built‑in Intl API for formatting and time zone conversion (no heavy date lib required). Intl.DateTimeFormat with the timeZone option reliably renders the time for each city’s zone.  ￼
+	•	“What‑if time” is modeled as a local Zoned DateTime baseline; other cities render that same instant in their own zones via Intl.DateTimeFormat({ timeZone: city.tz }).  ￼
+
+2.3 Framework & libs
+	•	Next.js (App Router) + TypeScript for DX, route handlers (if we later proxy APIs), and easy deployment, or a Vite + React build if you prefer purely static hosting.
+	•	Tailwind + shadcn/ui for accessible, composable primitives.  ￼
+	•	lucide-react for crisp, consistent line icons (moon/sun/sunrise/sunset).  ￼
+	•	TanStack Query to orchestrate client‑side requests, caching, retries, and background refresh (stale‑while‑revalidate).  ￼
+	•	LocalStorage to persist the user’s city list & preferences.
+
+3) Information architecture & types
+type City = {
+  id: string;          // stable key (e.g., geocoding id or `${name}-${country_code}`)
+  name: string;        // "London"
+  country?: string;    // "United Kingdom"
+  lat: number;
+  lon: number;
+  tz: string;          // IANA zone, e.g., "Europe/London"
+  builtIn?: boolean;   // default cities
+};
+
+type CurrentWeather = {
+  temperatureC: number;           // from Open-Meteo `current.temperature_2m`
+  precipMm?: number;              // `current.precipitation`
+  precipProbability?: number;     // `current.precipitation_probability`
+  code?: number;                  // `current.weather_code` (optional for icons/phrases)
+  observedAtISO: string;          // `current.time`
+};
+
+type AppState = {
+  cities: City[];                   // includes defaults
+  myLocal: { tz: string };          // `Intl.DateTimeFormat().resolvedOptions().timeZone`
+  nowOverride?: string | null;      // ISO of "what-if" local datetime, else null for real now
+};
+
+3.2 Default cities (seed)
+
+We’ll seed the five requested with (name, tz) and canonical coordinates:
+	•	London — Europe/London — (51.5074, -0.1278)
+	•	New York — America/New_York — (40.7128, -74.0060)
+	•	San Francisco — America/Los_Angeles — (37.7749, -122.4194)
+	•	Delhi — Asia/Kolkata — (28.6139, 77.2090)
+	•	Seoul — Asia/Seoul — (37.5665, 126.9780)
+
+(We can swap to dynamic geocoding on first run if you’d rather not hard‑code lat/lon.)
+
+4) Time logic (including your day‑phase rules)
+
+4.1 Day‑phase classifier
+type DayPhase = 'sleep' | 'early' | 'day' | 'evening' | 'night';
+
+export function classifyPhase(d: Date): DayPhase {
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  if (minutes <= 7 * 60 + 59) return 'sleep';       // 00:00–07:59
+  if (minutes <= 9 * 60 + 59) return 'early';       // 08:00–09:59
+  if (minutes <= 17 * 60 + 59) return 'day';        // 10:00–17:59
+  if (minutes <= 21 * 60 + 30) return 'evening';    // 18:00–21:30
+  return 'night';                                   // 21:31–23:59
+}
+
+4.2 Rendering a time in another city
+
+Use Intl.DateTimeFormat with timeZone: city.tz. Example:
+const fmt = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit', minute: '2-digit', hour12: false, timeZone: city.tz,
+});
+const timeLabel = fmt.format(targetInstant); // where targetInstant is a Date
+
+This leverages the platform’s timezone database and handles DST correctly.
+
+4.3 “What‑if time” model
+	•	When the user edits their local time, we build a Date in the user’s local zone for today (or for a selected date if we extend later).
+	•	That Date becomes the baseline instant; we format it into each city’s zone via Intl. No custom math, no manual offsets.  
+
+
+5) Data‑fetching contracts
+
+5.1 IP → location (local weather)
+	•	GET https://ipapi.co/json/ → { latitude, longitude, city, timezone, ... }
+Use client‑side on first load if geolocation permission is denied.  ￼
+
+5.2 City search (Add City)
+	•	GET https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=5&language=en
+Response includes latitude, longitude, name, country, and timezone. We store these in City.  ￼
+
+5.3 Current weather per city
+	•	GET https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,precipitation,precipitation_probability,weather_code&temperature_unit=celsius&precipitation_unit=mm&timezone=auto
+Use TanStack Query with staleTime ≈ 5 minutes and refetch on window focus
+
+
+6) UX flows & micro‑interactions
+
+6.1 Main list (Table/List)
+	•	Columns: City — Time (mono, large, weight 700 for hours; lighter minutes) — Weather (precip + temp °C).
+	•	Row affordances:
+	•	Hover → reveal a subtle trash icon (lucide Trash2) on the right; click to delete (with Toast “Undo” for 5s).
+	•	Time column shows an icon at left:
+	•	Moon (sleep), Sunrise (early), Sun (day), Sunset (evening), MoonStar (night) — lucide-react.  ￼
+	•	Add city: last row is a ghost ➕ Add city button. Opens a Dialog (shadcn/ui) with search input; debounce 300ms; show results list with city, country, and timezone. Select → row appears at the end.  ￼
+	•	Editable “my local time”:
+	•	Local time label appears at the top; click → swaps to an inline input (or a Popover + Time picker).
+	•	“Reset to now” pill appears while in what‑if mode.
+	•	Page chrome indicates “What‑if time active” (subtle tint) until reset.
+
+6.2 Typography & spacing
+	•	Time: mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace.
+	•	Sizes (Tailwind): time text-3xl (sm), text-4xl (md+). City text-lg/semibold. Weather text-base.
+	•	Vertical rhythm via space-y-2/3 on rows, ample padding; stick to a very light gray separator.
+
+6.3 Accessibility
+	•	Every interactive control is reachable by Tab (e.g., delete button visible on focus, not only hover).
+	•	Icons include aria‑label with the phase name.
+	•	Respect prefers-reduced-motion.
+
+
+7) Enhancements (post‑MVP)
+	•	Forecast at “what‑if time”: Open‑Meteo can return hourly forecast; we can pick the hour nearest to the edited local time (if within forecast window).  ￼
+	•	Reorder cities (drag handle).
+	•	Auto‑refresh when the minute ticks (without refetching weather every minute).
+	•	Offline first (cache last known weather).
+
+⸻
+
+8) Components (shadcn/ui building blocks)
+	•	<CityList>
+	•	<CityRow> (City, <TimeCell>, <WeatherCell>, <RowActions>)
+	•	<AddCityRow> (Button)
+	•	<TimeCell> renders formatted time + day‑phase icon.
+	•	<WeatherCell> small layout: precip (either mm or %) + °C.
+	•	<EditLocalTime> Inline editable; or <TimePicker> inside a Popover.
+	•	<AddCityDialog> uses Input, List, Dialog, Button.
+	•	<ConfirmDeleteToast> (Undo).
+	•	<EmptyState> (first‑run only).
+
+(See shadcn/ui installation & components list for the primitives.  ￼)
+
+⸻
+
+9) State, caching & persistence
+	•	TanStack Query for all network calls (useQuery per city), staleTime: 5 * 60_000, refetchOnWindowFocus: true.  ￼
+	•	LocalStorage: persist cities[], and nowOverride.
+	•	Derived state only for formatted strings and day‑phase classification.
+
+⸻
+
+10) Error & edge‑case handling
+	•	IP blocked / VPN / corporate network → show a dismissible banner “Couldn’t determine your location by IP”; still show defaults & allow manual city search.
+	•	CORS/network fail → per-row skeletons + retry button.
+	•	DST boundaries → delegated to Intl (we don’t compute offsets ourselves).  ￼
+	•	Duplicate cities → same (name, country, lat, lon) combination not added twice (offer “scroll to existing”).
+
+⸻
+
+11) Acceptance criteria (MVP)
+	1.	Local panel
+
+	•	When the page loads, local time equals the device clock; local weather renders using IP location when geolocation is denied. (ipapi provides timezone, latitude, longitude.)  ￼
+
+	2.	Default cities
+
+	•	The five defaults render immediately with time in their time zones and current weather.
+
+	3.	Add city
+
+	•	Typing “Paris” shows a list of matches (name, country, timezone). Selecting adds a row with accurate time and weather. (Open‑Meteo Geocoding → Forecast APIs.)  ￼
+
+	4.	Delete city
+
+	•	Hover reveals delete icon; keyboard focus reveals it too. Delete shows “Undo” for 5 seconds.
+
+	5.	Edit local time
+
+	•	Clicking the local time swaps to an input; changing it updates all city times consistently; “Reset to now” returns to real time.
+
+	6.	Icons
+
+	•	Each row shows the correct day‑phase icon based on the city’s local time, per your time buckets.

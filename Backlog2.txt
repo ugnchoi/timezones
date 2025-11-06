@@ -1,0 +1,668 @@
+
+A) Domain types (single source of truth)
+Create src/types.ts:
+// src/types.ts
+export type City = {
+  id: string;              // stable key (e.g., geocoding id or slug)
+  name: string;            // "London"
+  country?: string;        // "United Kingdom"
+  lat: number;
+  lon: number;
+  tz: string;              // IANA zone, e.g., "Europe/London"
+  builtIn?: boolean;       // default-seeded
+};
+
+export type DayPhase = 'sleep' | 'early' | 'day' | 'evening' | 'night';
+
+export type CurrentWeather = {
+  temperatureC: number;    // °C
+  precipMm?: number;       // mm
+  precipProbability?: number; // %
+  code?: number;           // optional weather code (e.g., for future icon use)
+  observedAtISO: string;   // ISO 8601 timestamp from API
+};
+
+export type AppState = {
+  cities: City[];
+  myLocal: { tz: string };       // resolved from Intl at runtime
+  nowOverrideISO?: string | null; // "what-if" local datetime (ISO) or null for real now
+};
+
+// For search dialog
+export type GeoSearchResult = {
+  id: string;       // from geocoder
+  name: string;     // "Paris"
+  country?: string; // "France"
+  lat: number;
+  lon: number;
+  tz: string;
+};
+
+// API Layer responses (normalized)
+export type IpLocation = {
+  city?: string;
+  lat: number;
+  lon: number;
+  tz: string;
+};
+
+export type FetchState<T> =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'success'; data: T }
+  | { status: 'error'; error: Error };
+
+
+  B) Time utilities (no heavy date lib)
+
+Create src/lib/time.ts:
+
+// src/lib/time.ts
+import type { DayPhase } from '@/types';
+
+// Format a Date into HH:mm for a given time zone (24h)
+export function formatHHmm(instant: Date, tz: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone: tz,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(instant);
+}
+
+// Get minutes since midnight for a given zone at a specific instant.
+export function minutesSinceMidnight(instant: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat(undefined, {
+    timeZone: tz,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(instant);
+  const hh = Number(parts.find(p => p.type === 'hour')?.value ?? '0');
+  const mm = Number(parts.find(p => p.type === 'minute')?.value ?? '0');
+  return hh * 60 + mm;
+}
+
+// Your specified buckets with non-overlapping minute edges.
+export function classifyPhaseAt(instant: Date, tz: string): DayPhase {
+  const m = minutesSinceMidnight(instant, tz);
+  if (m <= 7 * 60 + 59) return 'sleep';        // 00:00–07:59
+  if (m <= 9 * 60 + 59) return 'early';        // 08:00–09:59
+  if (m <= 17 * 60 + 59) return 'day';         // 10:00–17:59
+  if (m <= 21 * 60 + 30) return 'evening';     // 18:00–21:30
+  return 'night';                               // 21:31–23:59
+}
+
+// Build a "what-if" baseline instant in the USER'S local day from "HH:mm".
+export function localBaselineFromHHmm(hhmm: string): Date {
+  const [hh, mm] = hhmm.split(':').map(Number);
+  const d = new Date();
+  d.setHours(hh, mm, 0, 0); // This yields the correct absolute instant for user's local time
+  return d;
+}
+
+
+C) API contracts (fetchers are swappable)
+
+Create src/lib/api.ts (pure TS contracts + default fetchers):
+// src/lib/api.ts
+import type { CurrentWeather, GeoSearchResult, IpLocation } from '@/types';
+
+// Query keys (if you use TanStack Query)
+export const qk = {
+  weather: (lat: number, lon: number) => ['weather', lat, lon] as const,
+  geoSearch: (q: string) => ['geo', 'search', q] as const,
+  ipLocal: ['ip', 'local'] as const,
+};
+
+// --- Fetchers (can be swapped or proxied) ---
+
+export async function fetchIpLocation(): Promise<IpLocation> {
+  const res = await fetch('https://ipapi.co/json/');
+  if (!res.ok) throw new Error('IP lookup failed');
+  const j = await res.json();
+  return {
+    city: j.city ?? undefined,
+    lat: Number(j.latitude),
+    lon: Number(j.longitude),
+    tz: String(j.timezone),
+  };
+}
+
+export async function searchCitiesByName(query: string): Promise<GeoSearchResult[]> {
+  if (!query?.trim()) return [];
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
+  url.searchParams.set('name', query);
+  url.searchParams.set('count', '5');
+  url.searchParams.set('language', 'en');
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error('City search failed');
+  const j = await res.json();
+  const results: GeoSearchResult[] = (j.results ?? []).map((r: any) => ({
+    id: String(r.id ?? `${r.name}-${r.country_code}-${r.latitude}-${r.longitude}`),
+    name: r.name,
+    country: r.country,
+    lat: r.latitude,
+    lon: r.longitude,
+    tz: r.timezone, // provided by Open-Meteo geocoder
+  }));
+  return results;
+}
+
+export async function fetchCurrentWeather(lat: number, lon: number): Promise<CurrentWeather> {
+  const url = new URL('https://api.open-meteo.com/v1/forecast');
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lon));
+  url.searchParams.set('current', 'temperature_2m,precipitation,precipitation_probability,weather_code');
+  url.searchParams.set('temperature_unit', 'celsius');
+  url.searchParams.set('precipitation_unit', 'mm');
+  url.searchParams.set('timezone', 'auto');
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error('Weather fetch failed');
+  const j = await res.json();
+  const c = j.current ?? {};
+  return {
+    temperatureC: Number(c.temperature_2m ?? NaN),
+    precipMm: c.precipitation != null ? Number(c.precipitation) : undefined,
+    precipProbability: c.precipitation_probability != null ? Number(c.precipitation_probability) : undefined,
+    code: c.weather_code != null ? Number(c.weather_code) : undefined,
+    observedAtISO: String(c.time ?? new Date().toISOString()),
+  };
+}
+
+D) State hooks (localStorage + “what‑if” baseline)
+
+Create src/state/cityStore.ts:
+// src/state/cityStore.ts
+import * as React from 'react';
+import type { AppState, City } from '@/types';
+
+const STORAGE_KEY = 'timeweather:v1';
+
+function loadInitial(): Pick<AppState, 'cities'> {
+  if (typeof window === 'undefined') return { cities: [] };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { cities: [] };
+    const parsed = JSON.parse(raw);
+    return { cities: Array.isArray(parsed.cities) ? parsed.cities : [] };
+  } catch {
+    return { cities: [] };
+  }
+}
+
+export function useCityStore(seedDefaults?: City[]) {
+  const [cities, setCities] = React.useState<City[]>(() => {
+    const { cities } = loadInitial();
+    if (cities.length > 0) return cities;
+    return seedDefaults ?? [];
+  });
+
+  React.useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ cities }));
+  }, [cities]);
+
+  const addCity = React.useCallback((c: City) => {
+    setCities(prev => (prev.some(x => x.id === c.id) ? prev : [...prev, c]));
+  }, []);
+
+  const removeCity = React.useCallback((id: string) => {
+    setCities(prev => prev.filter(c => c.id !== id));
+  }, []);
+
+  return { cities, setCities, addCity, removeCity };
+}
+
+
+Create src/state/baseline.ts:
+// src/state/baseline.ts
+import * as React from 'react';
+
+const KEY = 'timeweather:baselineISO';
+
+export function useBaselineInstant() {
+  const [overrideISO, setOverrideISO] = React.useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem(KEY);
+  });
+
+  React.useEffect(() => {
+    if (overrideISO) localStorage.setItem(KEY, overrideISO);
+    else localStorage.removeItem(KEY);
+  }, [overrideISO]);
+
+  const instant = React.useMemo(() => {
+    return overrideISO ? new Date(overrideISO) : new Date();
+  }, [overrideISO]);
+
+  const setByLocalTimeHHmm = (hhmm: string) => {
+    const [hh, mm] = hhmm.split(':').map(Number);
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    setOverrideISO(d.toISOString());
+  };
+
+  const reset = () => setOverrideISO(null);
+
+  return { instant, overrideISO, setOverrideISO, setByLocalTimeHHmm, reset };
+}
+
+
+E) UI components — contracts (props & events)
+
+Icon mapping
+We’ll use lucide icons via a tiny mapping function; the UI component only needs the DayPhase.// src/components/PhaseIcon.tsx
+import { Moon, MoonStar, Sun, Sunrise, Sunset } from 'lucide-react';
+import type { DayPhase } from '@/types';
+
+export function PhaseIcon({ phase, className }: { phase: DayPhase; className?: string }) {
+  const map = {
+    sleep: Moon,
+    early: Sunrise,
+    day: Sun,
+    evening: Sunset,
+    night: MoonStar,
+  } as const;
+  const Cmp = map[phase];
+  return <Cmp aria-label={phase} className={className} />;
+}
+
+
+
+) TimeCell
+
+Purpose: Render time for a city at a supplied baseline instant, with mono typography and the day‑phase icon.
+// src/components/TimeCell.tsx
+import * as React from 'react';
+import { classifyPhaseAt, formatHHmm } from '@/lib/time';
+import { PhaseIcon } from './PhaseIcon';
+
+export type TimeCellProps = {
+  tz: string;
+  instant: Date;                 // baseline (now or what-if)
+  showIcon?: boolean;
+  className?: string;
+  timeClassName?: string;        // for font-mono, weights
+  iconClassName?: string;
+};
+
+export function TimeCell({
+  tz, instant, showIcon = true, className, timeClassName, iconClassName,
+}: TimeCellProps) {
+  const timeLabel = React.useMemo(() => formatHHmm(instant, tz), [instant, tz]);
+  const phase = React.useMemo(() => classifyPhaseAt(instant, tz), [instant, tz]);
+
+  return (
+    <div className={className}>
+      <div className="flex items-center gap-2">
+        {showIcon && <PhaseIcon phase={phase} className={iconClassName ?? 'size-5'} />}
+        <span className={timeClassName ?? 'font-mono tabular-nums text-2xl font-semibold'}>
+          {timeLabel}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+
+2) WeatherCell
+
+Purpose: Display precip + temperature °C for a city.
+Contract: Either pass weather (prefetched) or let the component fetch via lat/lon.
+
+// src/components/WeatherCell.tsx
+import * as React from 'react';
+import type { CurrentWeather } from '@/types';
+import { fetchCurrentWeather } from '@/lib/api';
+
+export type WeatherCellProps = {
+  lat: number;
+  lon: number;
+  preload?: CurrentWeather; // optional override
+  className?: string;
+};
+
+export function WeatherCell({ lat, lon, preload, className }: WeatherCellProps) {
+  const [state, setState] = React.useState(preload ? { status: 'success', data: preload } as const
+                                           : { status: 'loading' } as const);
+
+  React.useEffect(() => {
+    if (preload) return;
+    let on = true;
+    (async () => {
+      try {
+        const data = await fetchCurrentWeather(lat, lon);
+        if (on) setState({ status: 'success', data });
+      } catch (e: any) {
+        if (on) setState({ status: 'error', error: e });
+      }
+    })();
+    return () => { on = false; };
+  }, [lat, lon, preload]);
+
+  if (state.status === 'loading') return <div className={className}>—</div>;
+  if (state.status === 'error') return <div className={className} aria-live="polite">!</div>;
+
+  const w = state.data;
+  return (
+    <div className={className}>
+      <span className="text-sm">
+        {w.precipProbability != null ? `${Math.round(w.precipProbability)}%` :
+          w.precipMm != null ? `${w.precipMm.toFixed(1)}mm` : '—'}
+      </span>
+      <span className="mx-2 text-neutral-400">·</span>
+      <span className="font-medium">{Math.round(w.temperatureC)}°C</span>
+    </div>
+  );
+}
+
+If you adopt TanStack Query, swap the internal effect for a useQuery(qk.weather(lat, lon), …) and remove local state.
+
+3) CityRow
+
+Purpose: One line in the list.
+Events: onRemove (row delete), row is keyboard accessible.
+
+// src/components/CityRow.tsx
+import type { City } from '@/types';
+import { TimeCell } from './TimeCell';
+import { WeatherCell } from './WeatherCell';
+import { Button } from '@/components/ui/button'; // shadcn/ui
+import { Trash2 } from 'lucide-react';
+
+export type CityRowProps = {
+  city: City;
+  instant: Date;
+  onRemove?: (id: string) => void;
+  className?: string;
+};
+
+export function CityRow({ city, instant, onRemove, className }: CityRowProps) {
+  return (
+    <div
+      className={`group grid grid-cols-[1fr_auto_auto] items-center gap-4 px-3 py-3 ${className ?? ''}`}
+      role="row"
+    >
+      <div role="cell" className="truncate">
+        <div className="text-base font-semibold">{city.name}</div>
+        {city.country && <div className="text-xs text-neutral-500">{city.country}</div>}
+      </div>
+
+      <div role="cell">
+        <TimeCell tz={city.tz} instant={instant} />
+      </div>
+
+      <div role="cell" className="flex items-center gap-3">
+        <WeatherCell lat={city.lat} lon={city.lon} />
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={`Remove ${city.name}`}
+          onClick={() => onRemove?.(city.id)}
+          className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+4) CityList
+
+Purpose: Render the default + user cities; handle “➕ Add city” row.
+Events: onAdd, onRemove.
+
+// src/components/CityList.tsx
+import type { City } from '@/types';
+import { CityRow } from './CityRow';
+import { Button } from '@/components/ui/button';
+
+export type CityListProps = {
+  cities: City[];
+  instant: Date;
+  onAdd?: () => void;                // open AddCityDialog
+  onRemove?: (id: string) => void;
+  className?: string;
+};
+
+export function CityList({ cities, instant, onAdd, onRemove, className }: CityListProps) {
+  return (
+    <div className={className}>
+      <div role="table" aria-label="Cities">
+        {cities.map(c => (
+          <CityRow key={c.id} city={c} instant={instant} onRemove={onRemove} />
+        ))}
+        <div className="px-3 py-2">
+          <Button variant="ghost" onClick={onAdd}>➕ Add city</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+5) AddCityDialog
+
+Purpose: Search + select a city; returns a normalized City via onSelect.
+Contract: Parent controls open state.
+
+// src/components/AddCityDialog.tsx
+import * as React from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import type { City, GeoSearchResult } from '@/types';
+import { searchCitiesByName } from '@/lib/api';
+
+export type AddCityDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (city: City) => void;
+};
+
+export function AddCityDialog({ open, onOpenChange, onSelect }: AddCityDialogProps) {
+  const [q, setQ] = React.useState('');
+  const [results, setResults] = React.useState<GeoSearchResult[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    const h = setTimeout(async () => {
+      if (!q.trim()) return setResults([]);
+      setLoading(true);
+      try {
+        setResults(await searchCitiesByName(q));
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [q]);
+
+  const pick = (r: GeoSearchResult) => {
+    const city: City = {
+      id: r.id,
+      name: r.name,
+      country: r.country,
+      lat: r.lat,
+      lon: r.lon,
+      tz: r.tz,
+    };
+    onSelect(city);
+    onOpenChange(false);
+    setQ('');
+    setResults([]);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Add a city</DialogTitle></DialogHeader>
+        <Input
+          placeholder="Search city…"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          autoFocus
+        />
+        <div className="max-h-64 overflow-auto">
+          {loading && <div className="p-3 text-sm text-neutral-500">Searching…</div>}
+          {!loading && results.map(r => (
+            <button
+              key={r.id}
+              onClick={() => pick(r)}
+              className="w-full text-left px-3 py-2 hover:bg-neutral-50 rounded"
+            >
+              <div className="font-medium">{r.name}</div>
+              <div className="text-xs text-neutral-500">
+                {r.country} · {r.tz}
+              </div>
+            </button>
+          ))}
+          {!loading && !results.length && q && (
+            <div className="p-3 text-sm text-neutral-500">No results</div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+6) LocalTimeControl
+
+Purpose: Shows my local time; click to toggle edit; emits what‑if changes.
+Events: onChangeHHmm(hhmm), onReset().
+
+// src/components/LocalTimeControl.tsx
+import * as React from 'react';
+import { Button } from '@/components/ui/button';
+
+export type LocalTimeControlProps = {
+  hhmm: string;                  // current display (either real now or what-if formatted)
+  whatIfActive: boolean;
+  onChangeHHmm: (hhmm: string) => void;
+  onReset: () => void;
+};
+
+export function LocalTimeControl({ hhmm, whatIfActive, onChangeHHmm, onReset }: LocalTimeControlProps) {
+  const [editing, setEditing] = React.useState(false);
+  const [val, setVal] = React.useState(hhmm);
+
+  React.useEffect(() => setVal(hhmm), [hhmm]);
+
+  return (
+    <div className="flex items-center gap-2">
+      {!editing ? (
+        <button
+          className="font-mono tabular-nums text-3xl font-semibold hover:underline"
+          onClick={() => setEditing(true)}
+          aria-label="Edit local time"
+        >
+          {hhmm}
+        </button>
+      ) : (
+        <input
+          className="font-mono tabular-nums text-3xl font-semibold border-b outline-none w-[6ch]"
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { onChangeHHmm(val); setEditing(false); }
+            if (e.key === 'Escape') { setEditing(false); setVal(hhmm); }
+          }}
+          placeholder="HH:MM"
+          aria-label="Local time HH:MM"
+        />
+      )}
+      {whatIfActive && <Button variant="secondary" size="sm" onClick={onReset}>Reset to now</Button>}
+    </div>
+  );
+}
+F) Example composition (page skeleton)
+
+This shows how the contracts fit together. Create src/app/page.tsx (Next.js) or src/pages/Home.tsx (Vite+React).
+
+// Example: Home page composition (contracts in use)
+import * as React from 'react';
+import type { City } from '@/types';
+import { useCityStore } from '@/state/cityStore';
+import { useBaselineInstant } from '@/state/baseline';
+import { formatHHmm } from '@/lib/time';
+import { CityList } from '@/components/CityList';
+import { AddCityDialog } from '@/components/AddCityDialog';
+import { LocalTimeControl } from '@/components/LocalTimeControl';
+
+const DEFAULTS: City[] = [
+  { id: 'ldn', name: 'London',       lat: 51.5074, lon: -0.1278, tz: 'Europe/London',           builtIn: true },
+  { id: 'nyc', name: 'New York',     lat: 40.7128, lon: -74.0060, tz: 'America/New_York',       builtIn: true },
+  { id: 'sfo', name: 'San Francisco',lat: 37.7749, lon: -122.4194, tz: 'America/Los_Angeles',   builtIn: true },
+  { id: 'del', name: 'Delhi',        lat: 28.6139, lon: 77.2090,   tz: 'Asia/Kolkata',          builtIn: true },
+  { id: 'sel', name: 'Seoul',        lat: 37.5665, lon: 126.9780,  tz: 'Asia/Seoul',            builtIn: true },
+];
+
+export default function Home() {
+  const { cities, addCity, removeCity } = useCityStore(DEFAULTS);
+  const { instant, setByLocalTimeHHmm, reset, overrideISO } = useBaselineInstant();
+  const [openAdd, setOpenAdd] = React.useState(false);
+
+  const localHHmm = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(instant);
+
+  return (
+    <main className="mx-auto max-w-3xl p-6 space-y-6">
+      <header className="flex items-center justify-between">
+        <div>
+          <div className="text-sm uppercase tracking-wide text-neutral-500">My local time</div>
+          <LocalTimeControl
+            hhmm={localHHmm}
+            whatIfActive={!!overrideISO}
+            onChangeHHmm={(hhmm) => setByLocalTimeHHmm(hhmm)}
+            onReset={reset}
+          />
+        </div>
+      </header>
+
+      <section>
+        <div className="grid grid-cols-[1fr_auto_auto] gap-4 px-3 pb-1 text-xs uppercase tracking-wide text-neutral-500">
+          <div>City</div><div>Time</div><div>Weather</div>
+        </div>
+        <CityList
+          cities={cities}
+          instant={instant}
+          onAdd={() => setOpenAdd(true)}
+          onRemove={removeCity}
+        />
+      </section>
+
+      <AddCityDialog
+        open={openAdd}
+        onOpenChange={setOpenAdd}
+        onSelect={(city) => addCity(city)}
+      />
+    </main>
+  );
+}
+
+G) Event model summary (at a glance)
+	•	LocalTimeControl
+	•	onChangeHHmm(hhmm) → parent calls setByLocalTimeHHmm(hhmm) to enter what‑if mode.
+	•	onReset() → parent clears override, returns to real‑time ticking.
+	•	CityList
+	•	onAdd() → open AddCityDialog.
+	•	onRemove(id) → remove from store (show toast/undo at page level if desired).
+	•	AddCityDialog
+	•	onSelect(city) → parent adds to store; dialog closes.
+	•	CityRow
+	•	onRemove(id) → forwarded from CityList.
+	•	WeatherCell
+	•	Fetches itself (simple) or accepts preload if you centralize data fetching.
+
+⸻
+
+H) Styling & a11y defaults (applied via classNames)
+	•	Time text: font-mono tabular-nums text-2xl md:text-3xl font-semibold.
+	•	Row density: px-3 py-3, vertical rhythm gap-4, separators as needed (very light).
+	•	Delete button visibility: opacity-0 group-hover:opacity-100 focus:opacity-100.
+	•	All controls keyboard reachable; buttons have aria-label text.
